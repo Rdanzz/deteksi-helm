@@ -1,20 +1,23 @@
 import streamlit as st
-import cv2
 from ultralytics import YOLO
 from PIL import Image
+import cv2
 import numpy as np
+
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 
 st.set_page_config(
     page_title="Helmet Detection YOLOv8",
     layout="wide"
 )
 
-# Load model
-model = YOLO("runs/detect/train/weights/best.pt")
-
 st.title("Helmet Detection YOLOv8")
 st.write("Deteksi penggunaan helm dari gambar dan kamera secara realtime")
 
+# Load model YOLOv8
+model = YOLO("runs/detect/train/weights/best.pt")
+
+# === Tab Upload Gambar ===
 tab1, tab2 = st.tabs(["Upload Gambar", "Kamera"])
 
 with tab1:
@@ -40,33 +43,30 @@ with tab1:
             st.subheader("Hasil Deteksi")
             st.image(result_img, width=500)
 
+# === Tab Kamera ===
 with tab2:
-    run = st.checkbox("Jalankan Kamera")
-    FRAME_WINDOW = st.image([])
+    st.write("Jalankan kamera di browser untuk deteksi realtime")
 
-    cap = cv2.VideoCapture(0)
+    class VideoTransformer(VideoTransformerBase):
+        def transform(self, frame):
+            img = frame.to_ndarray(format="bgr24")
+            # Resize supaya model lebih cepat
+            img_resized = cv2.resize(img, (640, 640))
 
-    while run:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Tidak bisa membuka kamera")
-            break
+            # YOLOv8 inference
+            results = model(
+                img_resized,
+                conf=0.25,
+                iou=0.5,
+                imgsz=640
+            )
 
-        frame_resized = cv2.resize(frame, (640, 640))
+            annotated_frame = results[0].plot()
+            return annotated_frame
 
-        results = model(
-            frame_resized,
-            conf=0.15,
-            iou=0.5,
-            imgsz=640
-        )
-
-        annotated_frame = results[0].plot()
-
-        FRAME_WINDOW.image(
-            annotated_frame,
-            channels="BGR",
-            width=700
-        )
-
-    cap.release()
+    webrtc_streamer(
+        key="helmet-detection",
+        video_transformer_factory=VideoTransformer,
+        media_stream_constraints={"video": True, "audio": False},
+        async_transform=True
+    )
