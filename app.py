@@ -2,9 +2,10 @@ import streamlit as st
 from ultralytics import YOLO
 from PIL import Image
 import cv2
+import av # Pastikan library 'av' sudah terinstall di requirements.txt
 import numpy as np
-
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+# Tambahkan WebRtcMode di import
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration, WebRtcMode
 
 st.set_page_config(
     page_title="Helmet Detection YOLOv8",
@@ -14,10 +15,13 @@ st.set_page_config(
 st.title("Helmet Detection YOLOv8")
 st.write("Deteksi penggunaan helm dari gambar dan kamera secara realtime")
 
-# Load model YOLOv8
-model = YOLO("runs/detect/train/weights/best.pt")
+# Load model
+@st.cache_resource
+def load_model():
+    return YOLO("runs/detect/train/weights/best.pt")
 
-# === Tab Upload Gambar ===
+model = load_model()
+
 tab1, tab2 = st.tabs(["Upload Gambar", "Kamera"])
 
 with tab1:
@@ -28,8 +32,7 @@ with tab1:
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file).convert("RGB")
-
-        # Inference langsung
+        
         results = model(image, conf=0.25)
         result_img = results[0].plot()
 
@@ -43,30 +46,33 @@ with tab1:
             st.subheader("Hasil Deteksi")
             st.image(result_img, width=500)
 
-# === Tab Kamera ===
 with tab2:
     st.write("Jalankan kamera di browser untuk deteksi realtime")
 
-    class VideoTransformer(VideoTransformerBase):
-        def transform(self, frame):
+    class YOLOVideoProcessor:
+        def recv(self, frame):
+            # Konversi av.VideoFrame ke numpy array (BGR)
             img = frame.to_ndarray(format="bgr24")
-            # Resize supaya model lebih cepat
-            img_resized = cv2.resize(img, (640, 640))
 
-            # YOLOv8 inference
-            results = model(
-                img_resized,
-                conf=0.25,
-                iou=0.5,
-                imgsz=640
-            )
-
+            # Inference YOLOv8
+            results = model(img, conf=0.25)
+            
+            # Gambar bounding box
             annotated_frame = results[0].plot()
-            return annotated_frame
+
+            # Kembalikan sebagai av.VideoFrame
+            return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
+
+    # Konfigurasi STUN Server
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
 
     webrtc_streamer(
         key="helmet-detection",
-        video_transformer_factory=VideoTransformer,
+        video_processor_factory=YOLOVideoProcessor,
+        mode=WebRtcMode.SENDRECV, # <--- PERBAIKAN DI SINI (Gunakan Enum, bukan string)
+        rtc_configuration=rtc_configuration,
         media_stream_constraints={"video": True, "audio": False},
-        async_transform=True
+        async_processing=True
     )
